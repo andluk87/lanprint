@@ -9,14 +9,18 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
-const Version = "0.1.1"
+const Version = "0.2.0"
+const VirtualAdapter = "vEthernet (LANPrint-Printer)"
 
 type Config struct {
 	Name        string   `json:"name"`
 	Printer     string   `json:"printer"`
 	Interface   string   `json:"interface"`
+	Uplink      string   `json:"uplink"`
+	VLANID      int      `json:"vlan_id"`
 	Address     string   `json:"address"`
 	Mode        string   `json:"mode"`
 	RawFormat   string   `json:"raw_format"`
@@ -36,15 +40,19 @@ func Default() Config {
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
 	}
-	return Config{Name: "LANPrint", Mode: "shared", RawFormat: "text/plain", Allowed: []string{"192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "127.0.0.0/8"}, MaxJobBytes: 32 << 20, MaxClients: 8, MaxQueued: 32, RawPort: 9100, IPPPort: 8631, AdminPort: 8765, Token: hex.EncodeToString(b)}
+	return Config{Name: "LANPrint", Interface: VirtualAdapter, Mode: "bridge", RawFormat: "text/plain", Allowed: []string{"192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "127.0.0.0/8"}, MaxJobBytes: 32 << 20, MaxClients: 8, MaxQueued: 32, RawPort: 9100, IPPPort: 8631, AdminPort: 8765, Token: hex.EncodeToString(b)}
+}
+func validateEndpoint(mode, iface string, windows bool) error {
+	if mode != "bridge" { return errors.New("доступен только режим отдельного виртуального адаптера; Shared IP отключён") }
+	if windows && iface != VirtualAdapter { return errors.New("службы принтера разрешены только на " + VirtualAdapter + "; создайте виртуальный адаптер в приложении") }
+	return nil
 }
 func (c Config) Validate() error {
+	if c.VLANID < 0 || c.VLANID > 4094 { return errors.New("VLAN ID: 0 (без тега) или 1–4094") }
 	if c.Name == "" || len(c.Name) > 63 {
 		return errors.New("имя принтера должно содержать 1–63 байта")
 	}
-	if c.Mode != "shared" && c.Mode != "bridge" {
-		return errors.New("режим: shared или bridge")
-	}
+	if e := validateEndpoint(c.Mode, c.Interface, runtime.GOOS == "windows"); e != nil { return e }
 	if c.Interface == "" || net.ParseIP(c.Address).To4() == nil || net.ParseIP(c.Address).IsUnspecified() || net.ParseIP(c.Address).IsMulticast() {
 		return errors.New("выберите интерфейс и его конкретный IPv4")
 	}
@@ -87,6 +95,12 @@ func Load(path string) (Config, error) {
 		return c, e
 	}
 	e = json.Unmarshal(b, &c)
+	if e == nil && (c.Mode == "shared" || (c.Interface != "" && c.Interface != VirtualAdapter)) {
+		// Old versions listened on the host NIC. Do not restore that endpoint.
+		c.Mode = "bridge"
+		c.Interface = VirtualAdapter
+		c.Address = ""
+	}
 	return c, e
 }
 func Save(path string, c Config) error {

@@ -1,6 +1,8 @@
 package platform
 
 type Adapter struct {
+	Physical bool `json:"physical"`
+	Preferred bool `json:"preferred"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	MAC         string `json:"mac"`

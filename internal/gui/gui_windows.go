@@ -8,6 +8,7 @@ import (
 	"github.com/andluk87/lanprint/internal/platform"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -76,6 +77,7 @@ type application struct {
 	logs          <-chan string
 	lines         []string
 	adapters      []platform.Adapter
+	uplinks       []platform.Adapter
 	printers      []platform.Printer
 	server        *core.Server
 	desired, busy bool
@@ -85,12 +87,12 @@ type application struct {
 }
 
 var app *application
+var errVirtualIP = fmt.Errorf("виртуальный адаптер ожидает IPv4 из LAN; проверьте DHCP или примените Static IP")
 
 const (
 	netCombo     = 101
 	printerCombo = 102
 	nameEdit     = 103
-	modeCheck    = 104
 	rawCheck     = 105
 	autoCheck    = 106
 	ipEdit       = 107
@@ -102,6 +104,8 @@ const (
 	logEdit      = 113
 	statusEdit   = 114
 	jobEdit      = 115
+	uplinkCombo  = 116
+	vlanEdit     = 117
 )
 
 func (a *application) control(class, label string, id, x, y, w, h int, style uint32) uintptr {
@@ -139,6 +143,13 @@ func (a *application) async(work func() result) {
 	go func() { a.results <- work() }()
 }
 func (a *application) populate() {
+	send(a.controls[uplinkCombo], 0x14b, 0, 0)
+	uplink := 0
+	for i, v := range a.uplinks {
+		send(a.controls[uplinkCombo], 0x143, 0, uintptr(unsafe.Pointer(u(v.Name))))
+		if v.Name == a.cfg.Uplink { uplink = i }
+	}
+	send(a.controls[uplinkCombo], 0x14e, uintptr(uplink), 0)
 	send(a.controls[netCombo], 0x14b, 0, 0)
 	chosen := 0
 	for i, v := range a.adapters {
@@ -150,6 +161,7 @@ func (a *application) populate() {
 	}
 	send(a.controls[netCombo], 0x14e, uintptr(chosen), 0)
 	a.selectAdapter()
+	if len(a.adapters) == 0 { set(a.controls[netInfo], "Виртуальный адаптер ещё не создан. Выберите Ethernet и нажмите «Создать адаптер». ") }
 	send(a.controls[printerCombo], 0x14b, 0, 0)
 	chosen = 0
 	for i, v := range a.printers {
@@ -176,17 +188,19 @@ func (a *application) read() (core.Config, error) {
 	c.Name = text(a.controls[nameEdit])
 	c.Token = text(a.controls[tokenEdit])
 	c.AutoStart = a.checked(autoCheck)
-	c.Mode = "shared"
-	if a.checked(modeCheck) {
-		c.Mode = "bridge"
-	}
+	c.Mode = "bridge"
+	vlan, e := strconv.Atoi(strings.TrimSpace(text(a.controls[vlanEdit])))
+	if e != nil || vlan < 0 || vlan > 4094 { return c, fmt.Errorf("VLAN ID: 0 (без тега) или 1–4094") }
+	if vlan != c.VLANID { return c, fmt.Errorf("для изменения VLAN нажмите «Создать / VLAN…» и подтвердите настройку") }
+	ui := int(send(a.controls[uplinkCombo], 0x147, 0, 0))
+	if ui >= 0 && ui < len(a.uplinks) { c.Uplink = a.uplinks[ui].Name }
 	c.RawFormat = "text/plain"
 	if a.checked(rawCheck) {
 		c.RawFormat = "application/octet-stream"
 	}
 	i := int(send(a.controls[netCombo], 0x147, 0, 0))
 	if i < 0 || i >= len(a.adapters) {
-		return c, fmt.Errorf("выберите сетевой адаптер")
+		return c, fmt.Errorf("сначала создайте виртуальный адаптер LANPrint")
 	}
 	c.Interface = a.adapters[i].Name
 	c.Address = a.adapters[i].Address
@@ -195,6 +209,12 @@ func (a *application) read() (core.Config, error) {
 		return c, fmt.Errorf("выберите принтер")
 	}
 	c.Printer = a.printers[i].Name
+	ni := int(send(a.controls[netCombo], 0x147, 0, 0))
+	if !a.adapters[ni].Preferred || !a.adapters[ni].Up || strings.HasPrefix(c.Address, "169.254.") || c.Address == "" {
+		check := c; check.Address = "192.0.2.1"
+		if e := check.Validate(); e != nil { return c, e }
+		return c, errVirtualIP
+	}
 	return c, c.Validate()
 }
 func (a *application) refresh() {
@@ -214,7 +234,7 @@ func (a *application) refresh() {
 		}
 		return result{err: combined, fn: func() {
 			if e == nil {
-				a.adapters = ad
+				a.uplinks, a.adapters = platform.SplitAdapters(ad)
 			}
 			if pe == nil {
 				a.printers = p
@@ -223,9 +243,43 @@ func (a *application) refresh() {
 		}}
 	})
 }
+func (a *application) createBridge(startAfter bool) {
+	if a.busy { return }
+	if a.server != nil { a.error(fmt.Errorf("остановите службы перед настройкой виртуального адаптера")); return }
+	i := int(send(a.controls[uplinkCombo], 0x147, 0, 0))
+	if i < 0 || i >= len(a.uplinks) { a.error(fmt.Errorf("выберите физический Ethernet для подключения к LAN")); return }
+	uplink := a.uplinks[i].Name
+	vlan, e := strconv.Atoi(strings.TrimSpace(text(a.controls[vlanEdit])))
+	if e != nil || vlan < 0 || vlan > 4094 { a.error(fmt.Errorf("VLAN ID: 0 (без тега) или 1–4094")); return }
+	if !a.confirm(fmt.Sprintf("Создать или настроить выделенный виртуальный адаптер LANPrint через «%s», VLAN ID %d (0 = без тега)?\nПриложение при необходимости включит Hyper-V, создаст внешний коммутатор и отдельную виртуальную карту. DHCP запросит адрес из выбранной VLAN. На Ethernet порту должна быть разрешена эта VLAN.\nСеть может кратковременно прерваться; потребуется UAC. Если Hyper-V не включён, потребуется перезагрузка Windows. Продолжить?",uplink,vlan)) { return }
+	startAfter = startAfter || a.desired
+	a.desired = false
+	a.cfg.Uplink = uplink
+	pi := int(send(a.controls[printerCombo], 0x147, 0, 0))
+	if pi >= 0 && pi < len(a.printers) { a.cfg.Printer = a.printers[pi].Name }
+	set(a.controls[statusEdit], "Создание виртуального адаптера / ожидание DHCP…")
+	a.async(func() result {
+		r, e := platform.CreateBridge(uplink,vlan)
+		ad, ae := platform.Adapters()
+		if e == nil { e = ae }
+		return result{err: e, fn: func() {
+			if ae == nil { a.uplinks, a.adapters = platform.SplitAdapters(ad) }
+			a.cfg.Mode = "bridge"
+			a.cfg.Interface = core.VirtualAdapter
+			if r.OK { a.cfg.Address = r.Address; a.cfg.VLANID = r.VLANID; a.log(r.Message) }
+			a.populate()
+			if r.OK && ae == nil {
+				set(a.controls[statusEdit], r.Message)
+				if e := core.Save(a.path, a.cfg); e != nil { a.error(e) }
+				if startAfter { a.start() }
+			} else { set(a.controls[statusEdit], "Настройка не завершена; см. сообщение и журнал") }
+		}}
+	})
+}
 func (a *application) start() {
+	if len(a.adapters) == 0 { a.createBridge(true); return }
 	c, e := a.read()
-	if e != nil {
+	if e != nil && e != errVirtualIP {
 		a.error(e)
 		return
 	}
@@ -234,17 +288,21 @@ func (a *application) start() {
 	}
 	a.cfg = c
 	a.desired = true
+	waiting := e == errVirtualIP
 	a.async(func() result {
 		if a.server != nil {
 			a.server.Stop()
 		}
-		s, e := core.Start(c, platform.Backend{}, a.log)
+		var s *core.Server
+		var e error
+		if !waiting { s, e = core.Start(c, platform.Backend{}, a.log) }
 		if e == nil {
 			e = core.Save(a.path, c)
 		}
 		return result{err: e, fn: func() {
 			a.server = s
-			if s == nil {
+			if waiting { set(a.controls[statusEdit], errVirtualIP.Error()) }
+			if s == nil && !waiting {
 				a.desired = false
 			}
 		}}
@@ -272,7 +330,7 @@ func (a *application) monitor() {
 		}
 		address := ""
 		for _, v := range ad {
-			if v.Name == c.Interface && v.Up && !strings.HasPrefix(v.Address, "169.254.") {
+			if v.Name == core.VirtualAdapter && !v.Physical && v.Preferred && v.Up && v.Address != "" && !strings.HasPrefix(v.Address, "169.254.") {
 				if address == "" || v.Address == c.Address {
 					address = v.Address
 				}
@@ -302,7 +360,7 @@ func (a *application) monitor() {
 				if e := core.Save(a.path, c); e != nil {
 					a.log(e.Error())
 				}
-				a.adapters = ad
+				a.uplinks, a.adapters = platform.SplitAdapters(ad)
 				a.populate()
 				set(a.controls[statusEdit], "Соединение восстановлено: "+c.Address)
 			} else {
@@ -318,6 +376,7 @@ func (a *application) network(mode string) {
 	}
 	i := int(send(a.controls[netCombo], 0x147, 0, 0))
 	if i < 0 || i >= len(a.adapters) {
+		a.error(fmt.Errorf("сначала создайте виртуальный адаптер LANPrint"))
 		return
 	}
 	adapter := a.adapters[i]
@@ -352,6 +411,7 @@ func (a *application) command(id int) {
 			return
 		}
 		c, e := a.read()
+		if e == errVirtualIP { e = nil }
 		if e == nil {
 			exe, _ := os.Executable()
 			e = platform.AutoRun(exe, c.AutoStart)
@@ -404,6 +464,8 @@ func (a *application) command(id int) {
 	case 212:
 		exe, _ := os.Executable()
 		a.error(platform.OpenURL(strings.TrimSuffix(exe, "LANPrint.exe") + "docs\\INSTALLATION.md"))
+	case 213:
+		a.createBridge(false)
 	}
 }
 func windowProc(h uintptr, m uint32, w, l uintptr) uintptr {
@@ -491,11 +553,16 @@ func Run(c core.Config, path string, log func(string), logs <-chan string, autos
 		return e
 	}
 	a.hwnd = h
-	a.label("Сеть — интерфейс / текущий IPv4", 20, 15, 480)
-	a.control("COMBOBOX", "", netCombo, 20, 40, 640, 250, 0x00200003)
-	a.button("Обновить", 201, 680, 40, 140)
-	a.check("Bridge (выделенный Hyper-V адаптер)", modeCheck, 20, 75, 450, c.Mode == "bridge")
-	a.label("Shared использует IP Windows; Bridge требует scripts/bridge.ps1", 20, 103, 900)
+	a.label("Подключение к LAN — физический Ethernet (только uplink)", 20, 15, 900)
+	a.control("COMBOBOX", "", uplinkCombo, 20, 40, 410, 250, 0x00200003)
+	a.button("Создать / VLAN…", 213, 450, 40, 225)
+	a.button("Обновить", 201, 695, 40, 145)
+	a.label("VLAN ID", 860, 15, 120)
+	a.edit(strconv.Itoa(c.VLANID), vlanEdit, 860, 40, 110)
+	a.label("0 = без тега", 860, 78, 150)
+	a.label("Адаптер принтера", 20, 78, 180)
+	a.control("COMBOBOX", "", netCombo, 200, 75, 640, 250, 0x00200003)
+	a.label("Принтер работает только на отдельном vEthernet (LANPrint-Printer), с собственной MAC и IPv4.", 20, 103, 970)
 	a.label("", 20, 128, 900)
 	a.controls[netInfo] = a.controls[0]
 	a.label("IPv4", 20, 158, 160)

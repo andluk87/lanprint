@@ -22,6 +22,13 @@ jobs:
           test "$RELEASE_TAG" = "v$version"
       - name: Test and build Windows EXE inside Docker
         run: bash build.sh
+      - name: Validate PowerShell provisioning syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/internal/platform/bridge.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) { $errors | Format-List; throw 'Invalid provisioning script syntax' }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: LANPrint-windows-x64

@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -105,6 +106,27 @@ func TestConfigSecurity(t *testing.T) {
 	if e != nil || v.Token != c.Token {
 		t.Fatal("config roundtrip")
 	}
+}
+
+func TestWindowsEndpointCannotUsePhysicalNIC(t *testing.T) {
+	for _,v:=range [][2]string{{"shared","Ethernet"},{"bridge","Ethernet"},{"bridge","vEthernet (Default Switch)"},{"bridge",""}} {
+		if validateEndpoint(v[0],v[1],true)==nil { t.Fatalf("host endpoint accepted: %v",v) }
+	}
+	if e:=validateEndpoint("bridge",VirtualAdapter,true);e!=nil {t.Fatal(e)}
+}
+
+func TestVLANIDBoundaries(t *testing.T) {
+	for _,id:=range []int{0,1,100,4094}{c:=config();c.VLANID=id;if e:=c.Validate();e!=nil{t.Fatalf("valid VLAN %d: %v",id,e)}}
+	for _,id:=range []int{-1,4095,65535}{c:=config();c.VLANID=id;if c.Validate()==nil{t.Fatalf("reserved VLAN %d accepted",id)}}
+}
+
+func TestLegacySharedConfigMigratesWithoutReusingHostIP(t *testing.T) {
+	path:=t.TempDir()+"/config.json"
+	data:=[]byte(`{"name":"Office","printer":"USB Printer","interface":"Ethernet","address":"192.168.1.10","mode":"shared","admin_token":"01234567890123456789012345678901"}`)
+	if e:=os.WriteFile(path,data,0600);e!=nil{t.Fatal(e)}
+	c,e:=Load(path);if e!=nil{t.Fatal(e)}
+	if c.Mode!="bridge"||c.Interface!=VirtualAdapter||c.Address!=""||c.Printer!="USB Printer"||c.Token!="01234567890123456789012345678901" {t.Fatalf("bad migration: %+v",c)}
+	unchanged,e:=os.ReadFile(path);if e!=nil||!bytes.Equal(unchanged,data){t.Fatal("loading modified user settings on disk")}
 }
 func TestNetworkValidation(t *testing.T) {
 	if e := ValidateNetwork("192.168.1.44", "255.255.255.0", "192.168.1.1", "1.1.1.1,8.8.8.8"); e != nil {

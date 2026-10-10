@@ -33,21 +33,23 @@ Docker cache повторно использует неизменённые эт
 Дополнительный аудит всех пакетов и короткий fuzz-run выполняйте в образе builder:
 
 ```bash
-docker build --target build -t lanprint-builder:0.1.1 .
-docker run --rm -e CGO_ENABLED=1 lanprint-builder:0.1.1 go test -race ./...
-docker run --rm -e CGO_ENABLED=1 lanprint-builder:0.1.1 go test ./internal/core -run '^$' -fuzz FuzzDecodeIPP -fuzztime 10s -parallel 2
-docker run --rm -e GOOS=windows -e GOARCH=amd64 lanprint-builder:0.1.1 go vet ./...
+docker build --target build -t lanprint-builder:0.2.0 .
+docker run --rm -e CGO_ENABLED=1 lanprint-builder:0.2.0 go test -race ./...
+docker run --rm -e CGO_ENABLED=1 lanprint-builder:0.2.0 go test ./internal/core -run '^$' -fuzz FuzzDecodeIPP -fuzztime 10s -parallel 2
+docker run --rm -e GOOS=windows -e GOARCH=amd64 lanprint-builder:0.2.0 go vet ./...
 ```
 
 ## GitHub
 
-Push/PR запускает Docker-сборку, EXE и SHA-256 сохраняются как Actions artifact. Push тега `v0.1.1` запускает release job:
+Push/PR запускает Docker-сборку, EXE и SHA-256 сохраняются как Actions artifact. Push тега `v0.2.0` запускает release job:
 
 ```bash
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
-Workflow проверяет соответствие тега `core.Version`, затем публикует Release через предоставляемый Actions `github.token`. Права `contents: write` выдаются только release job. Все используемые Actions зафиксированы по commit SHA. Для следующего выпуска измените `core.Version`, версии в документации/Compose и выпустите соответствующий семантический тег. Публикуйте версию только после проверки Windows/оборудования или явно маркируйте её как предварительную.
+Workflow проверяет соответствие тега `core.Version`, затем публикует Release через предоставляемый Actions `github.token`. Права `contents: write` выдаются только release job. Все используемые Actions зафиксированы по commit SHA. В облачной рабочей среде сборку не запускайте: изменения отправляются в GitHub, где этот workflow выполняет Docker-сборку и тесты. На собственном VPS пользователь запускает `bash build.sh`.
+
+Для следующего выпуска измените `core.Version`, версии в документации/Compose и выпустите соответствующий семантический тег. Публикуйте версию только после проверки Windows/оборудования или явно маркируйте её как предварительную.
 
 Наличие workflow не означает, что GitHub Actions уже выполнился. Проверяйте статус run и фактические release assets; права репозитория/Actions могут требовать настройки владельцем. EXE не подписан Authenticode, SHA-256 подтверждает совпадение скачанного файла, но не удостоверяет издателя.

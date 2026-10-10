@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -53,8 +54,8 @@ func Start(c Config, b Backend, log func(string)) (*Server, error) {
 	if !found {
 		return nil, errors.New("IP не назначен выбранному адаптеру")
 	}
-	if c.Mode == "bridge" && iface.Name != "vEthernet (LANPrint-Printer)" {
-		return nil, errors.New("Bridge требует выделенный vEthernet (LANPrint...) адаптер из scripts/bridge.ps1")
+	if runtime.GOOS == "windows" && iface.Name != VirtualAdapter {
+		return nil, errors.New("создайте выделенный виртуальный адаптер из окна LANPrint")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{Cfg: c, ctx: ctx, cancel: cancel, slots: make(chan struct{}, c.MaxClients), conns: map[net.Conn]bool{}, log: log}
@@ -191,7 +192,7 @@ func (s *Server) admin(b Backend) http.Handler {
 			if e != nil {
 				errText = e.Error()
 			}
-			json.NewEncoder(w).Encode(map[string]any{"name": s.Cfg.Name, "address": s.Cfg.Address, "printer": s.Cfg.Printer, "status": status, "error": errText, "jobs": s.Queue.List()})
+			json.NewEncoder(w).Encode(map[string]any{"name": s.Cfg.Name, "address": s.Cfg.Address, "interface": s.Cfg.Interface, "uplink": s.Cfg.Uplink, "vlan_id": s.Cfg.VLANID, "printer": s.Cfg.Printer, "status": status, "error": errText, "jobs": s.Queue.List()})
 		case strings.HasPrefix(r.URL.Path, "/api/jobs/") && r.Method == "DELETE":
 			id, e := parseJobID(strings.TrimPrefix(r.URL.Path, "/api/jobs/"))
 			if e == nil {

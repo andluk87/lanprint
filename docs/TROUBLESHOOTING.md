@@ -9,11 +9,11 @@
 | Ошибка bind | `Get-NetTCPConnection -LocalPort 9100,8631,8765`; остановите свой конфликтующий сервис либо поменяйте порты в config и Firewall. |
 | Нет DHCP / адрес 169.254.* | DHCP сервер/кабель/Hyper-V switch/несколько MAC на порту; проверьте роутер. |
 | Static Duplicate/Tentative | `Get-NetIPAddress`; выберите свободный адрес вне DHCP pool или используйте резервацию. |
-| Bridge недоступен | Windows Home не поддерживает Hyper-V. Проверьте виртуализацию, Ethernet, switch и выделенный LANPrint-Printer NIC. Shared — отдельный режим с IP ПК. |
+| Bridge недоступен | Windows Home не поддерживает Hyper-V. Нужны Pro/Enterprise/Education, виртуализация, Ethernet. Приложение не переходит на IP ПК. |
 | Windows изменил основной IP после switch | Hyper-V переносит сетевой доступ на host vEthernet. Восстановите исходные параметры из локальной консоли; не удаляйте switch удалённо через него. |
-| Клиент не подключается | Конкретный IP/порт, Windows Firewall Private profile, CIDR ACL приложения, client isolation на Wi-Fi, VLAN/routing. Не публикуйте порты на VPS для runtime. |
+| Клиент не подключается | IP виртуального адаптера/порт, Windows Firewall Private profile, CIDR ACL приложения, client isolation на Wi-Fi, VLAN/routing. Не публикуйте порты на VPS для runtime. |
 | После DHCP служба работает, но клиент не видит | Адрес-специфичный Firewall rule нужно обновить. Обновите порт клиента/используйте DHCP reservation. GUI автоматически меняет bind, но не Firewall. |
-| Нет обнаружения | UDP5353, multicast на роутере, выбранная NIC, сторонний mDNS daemon. Посмотрите журнал `mDNS unavailable`; ручной IPP URI работает независимо от discovery. Автообнаружение требует отдельной аппаратной проверки. |
+| Нет обнаружения | UDP5353, multicast на роутере, виртуальная NIC, сторонний mDNS daemon. Посмотрите журнал `mDNS unavailable`; ручной IPP URI работает независимо от discovery. Автообнаружение требует отдельной аппаратной проверки. |
 | IPP клиент отказывает | Это базовый IPP, не IPP Everywhere. Отправляйте text/plain, image/png, image/jpeg; PDF/PWG/URF/Office не поддерживаются. |
 | RAW печатает мусор | Несовместимый PDL или RAW passthrough выключен. Не отправляйте произвольный PDF/Office/EMF как RAW. |
 | «spooled», но листа нет | Windows queue, offline/error состояние драйвера, бумага, выбранный порт/USB. Spooler acceptance не равен физическому completion. |
@@ -25,3 +25,13 @@
 Журналы `%LOCALAPPDATA%\LANPrint\lanprint.log` и `.log.1`, по ~2 MiB каждый. Последние 256 метаданных заданий хранятся в памяти; данные освобождаются после передачи/ошибки/отмены. Файлы документов на диск не сохраняются. При смене bind/остановке незавершённые задания LANPrint отменяются; отправленные задания остаются в Windows.
 
 Для отката автозапуска снимите флажок и сохраните. Для удаления Firewall правил используйте `Get-NetFirewallRule -DisplayName 'LANPrint TCP','LANPrint mDNS' | Remove-NetFirewallRule` в elevated PowerShell. Удаление Hyper-V switch требует проверки зависимостей и восстановления основной сети; выполнять только с локальной консоли.
+
+## Создание виртуального адаптера (0.2.0)
+
+Физический Ethernet в верхнем списке — только uplink. Нажмите «Создать / VLAN…»; службы нельзя запускать на его IP. При отсутствии Hyper-V приложение включает компонент и требует reboot; затем повторите создание. Нет отдельного IP — проверьте DHCP, port security/несколько MAC, Preferred address state и отсутствие APIPA. Для Static IP используйте только виртуальный адаптер. При ошибке UAC/Hyper-V смотрите сообщение помощника; не переключайте приложение на физический интерфейс.
+
+Если после обновления 0.1.x IP исчез из настроек, это миграция со Shared режима. Выберите uplink и создайте выделенную виртуальную карту; прежний токен/принтер сохраняются. Старое статическое имя/адрес физического интерфейса больше не подходят.
+
+## Tagged VLAN
+
+Поле VLAN ID (1–4094) настраивает Access VLAN порта виртуального адаптера Hyper-V. На физическом коммутаторе uplink должен разрешать tagged VLAN N; DHCP/relay/шлюз должны работать внутри этой VLAN. Если tagged VLAN недоступна, не используйте IP основного host интерфейса: проверьте `Get-VMNetworkAdapterVlan`, allowed VLANs на switch port и DHCP. Значение 0 — untagged сеть. После смены VLAN существующую Static подсеть нужно проверить/изменить вручную. VLAN filter драйвера физической карты может мешать Hyper-V получать теги: настройки зависят от оборудования.
