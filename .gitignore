@@ -1,0 +1,7 @@
+/LANPrint.exe
+/LANPrint.exe.sha256
+/dist/
+/config.json
+*.log
+__pycache__/
+*.pyc

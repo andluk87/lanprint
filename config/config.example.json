@@ -1,0 +1,16 @@
+{
+  "name": "LANPrint",
+  "printer": "REPLACE_WITH_WINDOWS_PRINTER_NAME",
+  "interface": "Ethernet",
+  "address": "192.168.1.50",
+  "mode": "shared",
+  "raw_format": "text/plain",
+  "allowed_cidrs": ["192.168.1.0/24"],
+  "max_job_bytes": 33554432,
+  "max_clients": 8,
+  "max_queued": 32,
+  "raw_port": 9100,
+  "ipp_port": 8631,
+  "admin_port": 8765,
+  "auto_start": false
+}

@@ -1,0 +1,7 @@
+.git
+LANPrint.exe
+LANPrint.exe.sha256
+dist
+attachments
+config.json
+*.log

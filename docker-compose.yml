@@ -1,0 +1,10 @@
+services:
+  build:
+    image: lanprint-builder:0.1.0
+    build:
+      context: .
+      target: build
+    network_mode: none
+    volumes:
+      - .:/export
+    command: ["sh", "-c", "cp /out/LANPrint.exe /out/LANPrint.exe.sha256 /export/"]
