@@ -1,4 +1,4 @@
-# LANPrint 0.1.0
+# LANPrint 0.1.1
 
 Приложение для Windows 10 x64: принимает сетевые задания и печатает через установленный драйвер локального принтера. **Docker используется только для сборки на Linux VPS**. На Windows запускается самостоятельный `LANPrint.exe`, Docker, Go и .NET не нужны.
 
@@ -55,3 +55,7 @@ PDF, Office, PWG Raster, URF, IPPS/TLS, AirPrint/Mopria и полный IPP Ever
 - [Исходное ТЗ](docs/TECHNICAL_SPECIFICATION.md)
 
 Настройки и журналы: `%LOCALAPPDATA%\LANPrint\`. Пример: [config/config.example.json](config/config.example.json). Не публикуйте действующий `admin_token`.
+
+## Исправление 0.1.1
+
+Разделены stdout JSON и stderr PowerShell CLIXML/progress, добавлена регрессионная проверка. Поиск принтеров выполняется даже при ошибке списка адаптеров; адаптеры без IPv4 также отображаются для настройки DHCP/Static.

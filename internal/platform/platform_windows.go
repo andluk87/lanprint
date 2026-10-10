@@ -19,21 +19,21 @@ import (
 func powershell(script string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	u := utf16.Encode([]rune("[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); $ErrorActionPreference='Stop'; " + script))
+	u := utf16.Encode([]rune("[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; try { " + script + " } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }"))
 	b := make([]byte, len(u)*2)
 	for i, v := range u {
 		binary.LittleEndian.PutUint16(b[i*2:], v)
 	}
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(b))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	out, e := cmd.CombinedOutput()
+	out, e := captureOutput(cmd)
 	if e != nil {
 		return nil, fmt.Errorf("PowerShell: %w: %s", e, out)
 	}
 	return out, nil
 }
 func Printers() ([]Printer, error) {
-	b, e := powershell(`$items=@(Get-Printer | ForEach-Object { @{name=$_.Name;driver=$_.DriverName;port=$_.PortName;status=[string]$_.PrinterStatus} }); ConvertTo-Json -InputObject $items -Compress`)
+	b, e := powershell(`$items=@(Get-Printer | ForEach-Object { @{name=$_.Name;driver=$_.DriverName;port=$_.PortName;status=[string]$_.PrinterStatus} }); [Console]::Write((ConvertTo-Json -InputObject $items -Compress))`)
 	if e != nil {
 		return nil, e
 	}
@@ -42,7 +42,7 @@ func Printers() ([]Printer, error) {
 	return p, e
 }
 func Adapters() ([]Adapter, error) {
-	b, e := powershell(`$items=@(Get-NetAdapter | ForEach-Object { $a=$_; $i=Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue; $gw=(Get-NetRoute -InterfaceIndex $a.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Select-Object -First 1).NextHop; @(Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue) | ForEach-Object { @{name=$a.Name;description=$a.InterfaceDescription;mac=$a.MacAddress;address=$_.IPAddress;mask=[string]$_.PrefixLength;gateway=[string]$gw;up=($a.Status -eq 'Up');dhcp=($i.Dhcp -eq 'Enabled')} } }); ConvertTo-Json -InputObject $items -Compress`)
+	b, e := powershell(`$items=@(foreach($a in @(Get-NetAdapter)) { $i=Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue; $gw=(Get-NetRoute -InterfaceIndex $a.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Select-Object -First 1).NextHop; $addresses=@(Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue); if($addresses.Count -eq 0){ $addresses=@(@{IPAddress='';PrefixLength=''}) }; foreach($address in $addresses){ @{name=$a.Name;description=$a.InterfaceDescription;mac=$a.MacAddress;address=[string]$address.IPAddress;mask=[string]$address.PrefixLength;gateway=[string]$gw;up=($a.Status -eq 'Up');dhcp=($i.Dhcp -eq 'Enabled')} } }); [Console]::Write((ConvertTo-Json -InputObject $items -Compress))`)
 	if e != nil {
 		return nil, e
 	}
@@ -50,8 +50,8 @@ func Adapters() ([]Adapter, error) {
 	e = json.Unmarshal(b, &a)
 	for i := range a {
 		var p int
-		fmt.Sscan(a[i].Mask, &p)
-		if p >= 0 && p <= 32 {
+		_, parseErr := fmt.Sscan(a[i].Mask, &p)
+		if parseErr == nil && p >= 0 && p <= 32 {
 			a[i].Mask = net.IP(net.CIDRMask(p, 32)).String()
 		}
 	}

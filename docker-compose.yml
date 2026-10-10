@@ -1,6 +1,6 @@
 services:
   build:
-    image: lanprint-builder:0.1.0
+    image: lanprint-builder:0.1.1
     build:
       context: .
       target: build

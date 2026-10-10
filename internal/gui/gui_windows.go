@@ -200,11 +200,27 @@ func (a *application) read() (core.Config, error) {
 func (a *application) refresh() {
 	a.async(func() result {
 		ad, e := platform.Adapters()
+		p, pe := platform.Printers()
+		var issues []string
 		if e != nil {
-			return result{err: e}
+			issues = append(issues, "Сетевые адаптеры: "+e.Error())
 		}
-		p, e := platform.Printers()
-		return result{err: e, fn: func() { a.adapters = ad; a.printers = p; a.populate() }}
+		if pe != nil {
+			issues = append(issues, "Принтеры: "+pe.Error())
+		}
+		var combined error
+		if len(issues) > 0 {
+			combined = fmt.Errorf("%s", strings.Join(issues, "\n"))
+		}
+		return result{err: combined, fn: func() {
+			if e == nil {
+				a.adapters = ad
+			}
+			if pe == nil {
+				a.printers = p
+			}
+			a.populate()
+		}}
 	})
 }
 func (a *application) start() {
